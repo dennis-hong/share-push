@@ -6,7 +6,7 @@ export default function App() {
   return (
       <WebView
           style={styles.container}
-          source={{ uri: 'https://dennis.k8s.kr/' }}
+          source={{ uri: 'https://share-push-web.vercel.app/' }}
       />
   );
 }
