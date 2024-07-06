@@ -1,10 +1,9 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { WebView } from 'react-native-webview';
 import Constants from 'expo-constants';
 import { StyleSheet, View, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -47,9 +46,12 @@ async function registerForPushNotificationsAsync() {
   return token;
 }
 
-async function sendTokenToServer(token, sessionData) {
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 5000; // 5초
+
+async function sendTokenToServer(token, sessionData, retryCount = 0) {
   try {
-    let userId = null;  // 기본값을 null로 설정
+    let userId = null;
     let isGuest = true;
 
     if (sessionData && sessionData.user && sessionData.user.id) {
@@ -79,7 +81,20 @@ async function sendTokenToServer(token, sessionData) {
     console.log(data.message);
   } catch (error) {
     console.error('Error sending token to server:', error);
+
+    if (retryCount < MAX_RETRIES) {
+      console.log(`Retrying... Attempt ${retryCount + 1} of ${MAX_RETRIES}`);
+      await retry(() => sendTokenToServer(token, sessionData, retryCount + 1));
+    } else {
+      console.error('Max retries reached. Failed to send token to server.');
+    }
   }
+}
+
+function retry(fn, delay = RETRY_DELAY) {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(fn()), delay);
+  });
 }
 
 export default function App() {
@@ -89,17 +104,28 @@ export default function App() {
   const responseListener = useRef();
   const webViewRef = useRef(null);
 
-  useEffect(() => {
-    registerForPushNotificationsAsync().then(token => {
-      setExpoPushToken(token);
-      if (token) {
-        sendTokenToServer(token, sessionData);
+  const updateToken = useCallback(async () => {
+    try {
+      const token = await registerForPushNotificationsAsync();
+      if (token !== expoPushToken) {
+        setExpoPushToken(token);
+        if (token) {
+          await sendTokenToServer(token, sessionData);
+        }
       }
-    });
+    } catch (error) {
+      console.error('Error updating token:', error);
+    }
+  }, [expoPushToken, sessionData]);
+
+  useEffect(() => {
+    updateToken();
+
+    // 주기적으로 토큰을 확인하고 업데이트
+    const tokenRefreshInterval = setInterval(updateToken, 24 * 60 * 60 * 1000); // 24시간마다
 
     notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
       console.log(notification);
-      // 여기서 WebView에 알림 정보를 전달할 수 있습니다.
       if (webViewRef.current) {
         webViewRef.current.postMessage(JSON.stringify({
           type: 'NOTIFICATION_RECEIVED',
@@ -110,7 +136,6 @@ export default function App() {
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
       console.log(response);
-      // 여기서 WebView에 알림 응답 정보를 전달할 수 있습니다.
       if (webViewRef.current) {
         webViewRef.current.postMessage(JSON.stringify({
           type: 'NOTIFICATION_RESPONSE',
@@ -122,10 +147,11 @@ export default function App() {
     return () => {
       Notifications.removeNotificationSubscription(notificationListener.current);
       Notifications.removeNotificationSubscription(responseListener.current);
+      clearInterval(tokenRefreshInterval);
     };
-  }, [sessionData]);
+  }, [sessionData, updateToken]);
 
-  const handleMessage = (event) => {
+  const handleMessage = useCallback((event) => {
     const data = JSON.parse(event.nativeEvent.data);
     if (data.type === 'GET_PUSH_TOKEN') {
       webViewRef.current.postMessage(JSON.stringify({
@@ -134,11 +160,9 @@ export default function App() {
       }));
     } else if (data.type === 'SESSION_UPDATE') {
       setSessionData(data.session);
-      if (expoPushToken) {
-        sendTokenToServer(expoPushToken, data.session);
-      }
+      updateToken(); // 세션이 업데이트될 때마다 토큰을 확인하고 필요시 업데이트
     }
-  };
+  }, [expoPushToken, updateToken]);
 
   return (
       <View style={styles.container}>
