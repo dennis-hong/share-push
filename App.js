@@ -4,6 +4,9 @@ import Constants from 'expo-constants';
 import { StyleSheet, View, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import * as SplashScreen from 'expo-splash-screen';
+
+SplashScreen.preventAutoHideAsync();
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -47,7 +50,7 @@ async function registerForPushNotificationsAsync() {
 }
 
 const MAX_RETRIES = 3;
-const RETRY_DELAY = 5000; // 5초
+const RETRY_DELAY = 5000;
 
 async function sendTokenToServer(token, sessionData, retryCount = 0) {
   try {
@@ -100,6 +103,7 @@ function retry(fn, delay = RETRY_DELAY) {
 export default function App() {
   const [expoPushToken, setExpoPushToken] = useState('');
   const [sessionData, setSessionData] = useState(null);
+  const [appIsReady, setAppIsReady] = useState(false);
   const notificationListener = useRef();
   const responseListener = useRef();
   const webViewRef = useRef(null);
@@ -119,37 +123,52 @@ export default function App() {
   }, [expoPushToken, sessionData]);
 
   useEffect(() => {
-    updateToken();
+    async function prepare() {
+      try {
+        await updateToken();
 
-    // 주기적으로 토큰을 확인하고 업데이트
-    const tokenRefreshInterval = setInterval(updateToken, 24 * 60 * 60 * 1000); // 24시간마다
+        notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
+          console.log(notification);
+          if (webViewRef.current) {
+            webViewRef.current.postMessage(JSON.stringify({
+              type: 'NOTIFICATION_RECEIVED',
+              notification: notification
+            }));
+          }
+        });
 
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log(notification);
-      if (webViewRef.current) {
-        webViewRef.current.postMessage(JSON.stringify({
-          type: 'NOTIFICATION_RECEIVED',
-          notification: notification
-        }));
+        responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
+          console.log(response);
+          if (webViewRef.current) {
+            webViewRef.current.postMessage(JSON.stringify({
+              type: 'NOTIFICATION_RESPONSE',
+              response: response
+            }));
+          }
+        });
+
+        setAppIsReady(true);
+      } catch (e) {
+        console.warn(e);
       }
-    });
+    }
 
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log(response);
-      if (webViewRef.current) {
-        webViewRef.current.postMessage(JSON.stringify({
-          type: 'NOTIFICATION_RESPONSE',
-          response: response
-        }));
-      }
-    });
+    prepare();
+
+    const tokenRefreshInterval = setInterval(updateToken, 24 * 60 * 60 * 1000);
 
     return () => {
       Notifications.removeNotificationSubscription(notificationListener.current);
       Notifications.removeNotificationSubscription(responseListener.current);
       clearInterval(tokenRefreshInterval);
     };
-  }, [sessionData, updateToken]);
+  }, [updateToken]);
+
+  const onLayoutRootView = useCallback(async () => {
+    if (appIsReady) {
+      await SplashScreen.hideAsync();
+    }
+  }, [appIsReady]);
 
   const handleMessage = useCallback((event) => {
     const data = JSON.parse(event.nativeEvent.data);
@@ -160,17 +179,22 @@ export default function App() {
       }));
     } else if (data.type === 'SESSION_UPDATE') {
       setSessionData(data.session);
-      updateToken(); // 세션이 업데이트될 때마다 토큰을 확인하고 필요시 업데이트
+      updateToken();
     }
   }, [expoPushToken, updateToken]);
 
+  if (!appIsReady) {
+    return null;
+  }
+
   return (
-      <View style={styles.container}>
+      <View style={styles.container} onLayout={onLayoutRootView}>
         <WebView
             ref={webViewRef}
             style={styles.webview}
             source={{ uri: 'https://share-push-web.vercel.app/' }}
             onMessage={handleMessage}
+            userAgent="Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36"
             injectedJavaScript={`
           window.addEventListener('message', function(event) {
             if (event.data && event.data.type === 'SESSION_UPDATE') {
