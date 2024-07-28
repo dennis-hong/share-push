@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { WebView } from 'react-native-webview';
 import Constants from 'expo-constants';
-import { StyleSheet, View, Platform } from 'react-native';
+import { StyleSheet, View, Platform, Linking } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import * as SplashScreen from 'expo-splash-screen';
@@ -108,6 +108,15 @@ export default function App() {
   const responseListener = useRef();
   const webViewRef = useRef(null);
 
+  const handleShouldStartLoadWithRequest = (event) => {
+    const { url } = event;
+    if (url.includes('kakaolink://')) {
+      Linking.openURL(url);
+      return false; // WebView에서 URL 로딩을 중지
+    }
+    return true; // 다른 모든 URL은 WebView에서 로드
+  };
+
   const updateToken = useCallback(async () => {
     try {
       const token = await registerForPushNotificationsAsync();
@@ -202,6 +211,7 @@ export default function App() {
             }
           });
         `}
+            onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
         />
       </View>
   );

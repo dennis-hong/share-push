@@ -39,3 +39,4 @@ yarn-error.*
 
 # secrets
 google-services.json
+.aider*
